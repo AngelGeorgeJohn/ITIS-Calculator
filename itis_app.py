@@ -259,12 +259,7 @@ for med_name, cfg in MEDS_IV.items():
 
         # ---- Clip course total to upper cap (NO error) ----
         course_dose_used = clip_course_total(course_sum_dose, cfg["course_cap_dose"])
-
-        if course_sum_dose > cfg["course_cap_dose"]:
-            st.info(
-                f"{med_name} course total (before cap) = {course_sum_dose:.0f}. "
-                f"Using capped dose = {course_dose_used:.0f}."
-            )
+# (silently cap course total; no message shown)
 
         # ---- Minimum course dose rule (hard) ----
         if course_dose_used < float(cfg["course_min_dose"]):
@@ -416,3 +411,4 @@ st.metric("Estimated Cumulative ITIS", f"{cumulative_itis:.4f}")
 
 if any_errors:
     st.warning("One or more inputs were invalid. Some medications/courses may have been excluded.")
+
