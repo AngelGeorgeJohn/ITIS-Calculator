@@ -426,7 +426,7 @@ def calculate_all_results():
         n_doses = int(st.session_state.get(f"{med_name}_n_doses", 1))
         entries = []
         invalid_found = False
-        med_summary_doses = []
+        med_entered_doses = []
 
         for i in range(n_doses):
             dose = int(st.session_state.get(f"{med_name}_dose_{i}", cfg["default_dose"]))
@@ -441,7 +441,7 @@ def calculate_all_results():
                 invalid_found = True
 
             entries.append((iv_date, dose))
-            med_summary_doses.append(f"{dose} on {date_display(iv_date)}")
+            med_entered_doses.append(f"{date_display(iv_date)}: {dose}")
 
         if invalid_found:
             summary_lines.append(f"- {med_name}: excluded due to invalid input(s).")
@@ -451,7 +451,6 @@ def calculate_all_results():
         courses = group_into_courses(entries, window_days=int(cfg["course_window_days"]))
 
         med_course_itises = []
-        course_descriptions = []
         for course_start_date, course_sum_dose in courses:
             if is_future_date(course_start_date) or is_after_encounter(course_start_date, encounter_date):
                 any_errors = True
@@ -470,13 +469,10 @@ def calculate_all_results():
                 continue
 
             med_course_itises.append(compute_itis(days_since, course_dose_used, cfg))
-            course_descriptions.append(
-                f"course starting {date_display(course_start_date)}, cumulative dose {int(course_dose_used)}"
-            )
 
         if med_course_itises:
             overall_components.append(combine_itis(med_course_itises))
-            summary_lines.append(f"- {med_name}: " + "; ".join(course_descriptions))
+            summary_lines.append(f"- {med_name}: " + "; ".join(med_entered_doses))
         else:
             summary_lines.append(f"- {med_name}: no valid course included.")
 
@@ -516,7 +512,7 @@ def calculate_all_results():
                 if course_total < ORAL_CYC["course_min"]:
                     any_errors = True
                     oral_summary.append(
-                        f"course #{i+1}: excluded (course total {int(course_total)} < {ORAL_CYC['course_min']})"
+                        f"course #{i+1}: excluded (entered {daily_dose}/day, {date_display(oral_start)} to {date_display(oral_stop)})"
                     )
                 else:
                     course_total_used = clip_course_total(course_total, ORAL_CYC["course_max"])
@@ -528,7 +524,7 @@ def calculate_all_results():
                         compute_itis(interval_since_stop, course_total_used, ORAL_CYC)
                     )
                     oral_summary.append(
-                        f"course #{i+1}: {daily_dose}/day, {date_display(oral_start)} to {date_display(oral_stop)}, cumulative dose {int(course_total_used)}"
+                        f"course #{i+1}: {date_display(oral_start)} to {date_display(oral_stop)}, dose {daily_dose}/day"
                     )
             else:
                 oral_summary.append(f"course #{i+1}: excluded due to invalid input(s).")
@@ -599,7 +595,7 @@ def calculate_all_results():
 
                 med_course_itises.append(med_itis)
                 med_summary.append(
-                    f"course #{i+1}: {med_daily_dose}/day, {date_display(med_start)} to {date_display(med_stop)}"
+                    f"course #{i+1}: {date_display(med_start)} to {date_display(med_stop)}, dose {med_daily_dose}/day"
                 )
             else:
                 med_summary.append(f"course #{i+1}: excluded due to invalid input(s).")
@@ -676,7 +672,7 @@ def calculate_all_results():
 
                 prd_course_itises.append(prd_itis)
                 prd_summary.append(
-                    f"course #{i+1}: {dose_cat}, {date_display(prd_start)} to {date_display(prd_stop)}"
+                    f"course #{i+1}: {date_display(prd_start)} to {date_display(prd_stop)}, dose {dose_cat}"
                 )
             else:
                 prd_summary.append(f"course #{i+1}: excluded due to invalid input(s).")
