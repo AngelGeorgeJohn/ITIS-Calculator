@@ -8,6 +8,14 @@ from datetime import date
 st.set_page_config(page_title="ITIS Calculator", layout="centered")
 
 # ============================================================
+# Session state for simple multi-page flow
+# ============================================================
+if "show_result_page" not in st.session_state:
+    st.session_state.show_result_page = False
+if "result_payload" not in st.session_state:
+    st.session_state.result_payload = None
+
+# ============================================================
 # Core model helpers
 # ============================================================
 def sigmoid_curve(x, A, n, d):
@@ -24,15 +32,12 @@ def make_linear(a1, a2, x1, x2):
     return m, b
 
 def compute_itis(days_since_iv, dose, cfg):
-    # A(dose)
     m_A, b_A = make_linear(cfg["A1"], cfg["A2"], cfg["dose1"], cfg["dose2"])
     A = m_A * dose + b_A
 
-    # d(dose)
     m_d, b_d = make_linear(cfg["d1"], cfg["d2"], cfg["dose1"], cfg["dose2"])
     d = m_d * dose + b_d
 
-    # n(dose)
     n1 = calculate_n_from_vanish(cfg["d1"], cfg["vanish1"])
     n2 = calculate_n_from_vanish(cfg["d2"], cfg["vanish2"])
     m_n, b_n = make_linear(n1, n2, cfg["dose1"], cfg["dose2"])
@@ -56,6 +61,7 @@ def group_into_courses(entries, window_days):
     """
     if not entries:
         return []
+
     entries = sorted(entries, key=lambda x: x[0])
 
     courses = []
@@ -154,7 +160,7 @@ MEDS_IV = {
 }
 
 ORAL_CYC = {
-    "dose1": 75, "dose2": 25000,  # course_total model range
+    "dose1": 75, "dose2": 25000,
     "A1": 0.60, "A2": 0.90,
     "d1": 70.0, "d2": 90.0,
     "vanish1": 90.0, "vanish2": 115.0,
@@ -247,8 +253,6 @@ def render_decay_oral_medication_section(
     not_stopped_prefix,
     dose_prefix,
 ):
-    global any_errors, overall_components, encounter_date
-
     st.subheader(med_name)
 
     med_received = st.radio(
@@ -265,7 +269,7 @@ def render_decay_oral_medication_section(
             "to estimate the current approximate score."
         )
 
-        n_courses = st.number_input(
+        st.number_input(
             f"How many {med_name.lower()} courses were given?",
             min_value=1,
             max_value=int(cfg["max_n_courses"]),
@@ -274,47 +278,44 @@ def render_decay_oral_medication_section(
             key=n_courses_key,
         )
 
-        med_course_itises = []
-
-        for i in range(int(n_courses)):
+        for i in range(int(st.session_state[n_courses_key])):
             st.markdown(f"**Course #{i+1}**")
 
             c1, c2 = st.columns(2)
             with c1:
-                med_start = st.date_input(
+                st.date_input(
                     f"Start date #{i+1} (DD/MM/YYYY)",
-                    value=encounter_date,
-                    max_value=encounter_date,
+                    value=st.session_state["global_encounter_date"],
+                    max_value=st.session_state["global_encounter_date"],
                     format="DD/MM/YYYY",
                     key=f"{start_prefix}_{i}",
                 )
 
-            med_not_stopped = st.checkbox(
+            st.checkbox(
                 f"Course #{i+1} not stopped yet (use Encounter date as Stop date)",
                 value=False,
                 key=f"{not_stopped_prefix}_{i}",
             )
 
             with c2:
-                if med_not_stopped:
-                    med_stop = encounter_date
+                if st.session_state[f"{not_stopped_prefix}_{i}"]:
                     st.date_input(
                         f"Stop date #{i+1} (DD/MM/YYYY)",
-                        value=med_stop,
+                        value=st.session_state["global_encounter_date"],
                         disabled=True,
                         format="DD/MM/YYYY",
                         key=f"{stop_disabled_prefix}_{i}",
                     )
                 else:
-                    med_stop = st.date_input(
+                    st.date_input(
                         f"Stop date #{i+1} (DD/MM/YYYY)",
-                        value=encounter_date,
-                        max_value=encounter_date,
+                        value=st.session_state["global_encounter_date"],
+                        max_value=st.session_state["global_encounter_date"],
                         format="DD/MM/YYYY",
                         key=f"{stop_prefix}_{i}",
                     )
 
-            med_daily_dose = st.number_input(
+            st.number_input(
                 f"Daily dose #{i+1} ({cfg['daily_dose_units']})",
                 min_value=0,
                 value=int(cfg["default_dose"]),
@@ -323,77 +324,12 @@ def render_decay_oral_medication_section(
                 key=f"{dose_prefix}_{i}",
             )
 
-            med_invalid = False
-            if is_future_date(med_start) or is_after_encounter(med_start, encounter_date):
-                st.error(
-                    f"Course #{i+1}: Start date must be on or before the encounter/current date and cannot be a future date. "
-                    f"This {med_name.lower()} course is excluded."
-                )
-                any_errors = True
-                med_invalid = True
-
-            if is_future_date(med_stop) or is_after_encounter(med_stop, encounter_date):
-                st.error(
-                    f"Course #{i+1}: Stop date must be on or before the encounter/current date and cannot be a future date. "
-                    f"This {med_name.lower()} course is excluded."
-                )
-                any_errors = True
-                med_invalid = True
-
-            if med_stop < med_start:
-                st.error(
-                    f"Course #{i+1}: Stop date must be on or after start date. "
-                    f"This {med_name.lower()} course is excluded."
-                )
-                any_errors = True
-                med_invalid = True
-
-            if int(med_daily_dose) < cfg["daily_min"] or int(med_daily_dose) > cfg["daily_max"]:
-                st.error(
-                    f"Course #{i+1}: Daily dose = {int(med_daily_dose)} is outside the allowed range "
-                    f"({cfg['daily_min']}–{cfg['daily_max']}). "
-                    f"This {med_name.lower()} course is excluded."
-                )
-                any_errors = True
-                med_invalid = True
-
-            if not med_invalid:
-                # Because stop date max_value is encounter_date, encounter_date <= stop_date
-                # is effectively equality for active treatment.
-                if encounter_date <= med_stop:
-                    med_itis = calculate_linear_score(
-                        int(med_daily_dose),
-                        cfg["dose1"],
-                        cfg["dose2"],
-                        cfg["min_score"],
-                        cfg["max_score"],
-                    )
-                else:
-                    interval_since_stop = (encounter_date - med_stop).days
-                    if interval_since_stop < 0:
-                        interval_since_stop = 0
-
-                    med_itis = compute_itis(
-                        interval_since_stop,
-                        int(med_daily_dose),
-                        cfg,
-                    )
-
-                med_course_itises.append(med_itis)
-
-            if i < int(n_courses) - 1:
+            if i < int(st.session_state[n_courses_key]) - 1:
                 st.divider()
-
-        if med_course_itises:
-            overall_components.append(combine_itis(med_course_itises))
-        else:
-            st.warning(f"No valid {med_name} courses were included.")
     else:
         st.caption("Not included (not received).")
 
 def render_prednisolone_section():
-    global any_errors, overall_components, encounter_date
-
     st.subheader("Prednisolone")
 
     prd_received = st.radio(
@@ -410,7 +346,7 @@ def render_prednisolone_section():
             "to estimate the current approximate score."
         )
 
-        n_prd_courses = st.number_input(
+        st.number_input(
             "How many prednisolone courses were given?",
             min_value=1,
             max_value=int(PREDNISOLONE["max_n_courses"]),
@@ -419,82 +355,308 @@ def render_prednisolone_section():
             key="prd_n_courses",
         )
 
-        prd_course_itises = []
-
-        for i in range(int(n_prd_courses)):
+        for i in range(int(st.session_state["prd_n_courses"])):
             st.markdown(f"**Course #{i+1}**")
 
             c1, c2 = st.columns(2)
             with c1:
-                prd_start = st.date_input(
+                st.date_input(
                     f"Start date #{i+1} (DD/MM/YYYY)",
-                    value=encounter_date,
-                    max_value=encounter_date,
+                    value=st.session_state["global_encounter_date"],
+                    max_value=st.session_state["global_encounter_date"],
                     format="DD/MM/YYYY",
                     key=f"prd_start_{i}",
                 )
 
-            prd_not_stopped = st.checkbox(
+            st.checkbox(
                 f"Course #{i+1} not stopped yet (use Encounter date as Stop date)",
                 value=False,
                 key=f"prd_not_stopped_{i}",
             )
 
             with c2:
-                if prd_not_stopped:
-                    prd_stop = encounter_date
+                if st.session_state[f"prd_not_stopped_{i}"]:
                     st.date_input(
                         f"Stop date #{i+1} (DD/MM/YYYY)",
-                        value=prd_stop,
+                        value=st.session_state["global_encounter_date"],
                         disabled=True,
                         format="DD/MM/YYYY",
                         key=f"prd_stop_disabled_{i}",
                     )
                 else:
-                    prd_stop = st.date_input(
+                    st.date_input(
                         f"Stop date #{i+1} (DD/MM/YYYY)",
-                        value=encounter_date,
-                        max_value=encounter_date,
+                        value=st.session_state["global_encounter_date"],
+                        max_value=st.session_state["global_encounter_date"],
                         format="DD/MM/YYYY",
                         key=f"prd_stop_{i}",
                     )
 
-            dose_cat = st.selectbox(
+            st.selectbox(
                 f"Dose category #{i+1}",
                 options=PREDNISOLONE["dose_categories"],
                 index=PREDNISOLONE["dose_categories"].index(PREDNISOLONE["default_category"]),
                 key=f"prd_dose_cat_{i}",
             )
 
+            if i < int(st.session_state["prd_n_courses"]) - 1:
+                st.divider()
+    else:
+        st.caption("Not included (not received).")
+
+# ============================================================
+# Calculation
+# ============================================================
+def calculate_all_results():
+    encounter_date = st.session_state["global_encounter_date"]
+
+    any_errors = False
+    overall_components = []
+    summary_lines = []
+
+    # --------------------------------------------------------
+    # IV meds
+    # --------------------------------------------------------
+    for med_name, cfg in MEDS_IV.items():
+        received = st.session_state.get(f"{med_name}_received", "No")
+
+        if received == "No":
+            continue
+
+        n_doses = int(st.session_state.get(f"{med_name}_n_doses", 1))
+        entries = []
+        invalid_found = False
+        med_summary_doses = []
+
+        for i in range(n_doses):
+            dose = int(st.session_state.get(f"{med_name}_dose_{i}", cfg["default_dose"]))
+            iv_date = st.session_state.get(f"{med_name}_date_{i}", encounter_date)
+
+            if is_future_date(iv_date) or is_after_encounter(iv_date, encounter_date):
+                any_errors = True
+                invalid_found = True
+
+            if not dose_is_valid(dose, cfg["dose1"], cfg["dose2"]):
+                any_errors = True
+                invalid_found = True
+
+            entries.append((iv_date, dose))
+            med_summary_doses.append(f"{dose} on {date_display(iv_date)}")
+
+        if invalid_found:
+            summary_lines.append(f"- {med_name}: excluded due to invalid input(s).")
+            continue
+
+        entries.sort(key=lambda x: x[0])
+        courses = group_into_courses(entries, window_days=int(cfg["course_window_days"]))
+
+        med_course_itises = []
+        course_descriptions = []
+        for course_start_date, course_sum_dose in courses:
+            if is_future_date(course_start_date) or is_after_encounter(course_start_date, encounter_date):
+                any_errors = True
+                med_course_itises = []
+                break
+
+            course_dose_used = clip_course_total(course_sum_dose, cfg["course_cap_dose"])
+
+            if course_dose_used < float(cfg["course_min_dose"]):
+                any_errors = True
+                continue
+
+            days_since = (encounter_date - course_start_date).days
+            if days_since < 0:
+                any_errors = True
+                continue
+
+            med_course_itises.append(compute_itis(days_since, course_dose_used, cfg))
+            course_descriptions.append(
+                f"course starting {date_display(course_start_date)}, cumulative dose {int(course_dose_used)}"
+            )
+
+        if med_course_itises:
+            overall_components.append(combine_itis(med_course_itises))
+            summary_lines.append(f"- {med_name}: " + "; ".join(course_descriptions))
+        else:
+            summary_lines.append(f"- {med_name}: no valid course included.")
+
+    # --------------------------------------------------------
+    # Oral Cyclophosphamide
+    # --------------------------------------------------------
+    if st.session_state.get("oral_cyc_received", "No") == "Yes":
+        n_oral_courses = int(st.session_state.get("oral_cyc_n_courses", 1))
+        oral_course_itises = []
+        oral_summary = []
+
+        for i in range(n_oral_courses):
+            oral_start = st.session_state.get(f"oral_cyc_start_{i}", encounter_date)
+            not_stopped = st.session_state.get(f"oral_cyc_not_stopped_{i}", False)
+            oral_stop = encounter_date if not_stopped else st.session_state.get(f"oral_cyc_stop_{i}", encounter_date)
+            daily_dose = int(st.session_state.get(f"oral_cyc_daily_dose_{i}", 75))
+
+            oral_invalid = False
+            if is_future_date(oral_start) or is_after_encounter(oral_start, encounter_date):
+                any_errors = True
+                oral_invalid = True
+            if is_future_date(oral_stop) or is_after_encounter(oral_stop, encounter_date):
+                any_errors = True
+                oral_invalid = True
+            if oral_stop < oral_start:
+                any_errors = True
+                oral_invalid = True
+            if daily_dose < ORAL_CYC["daily_min"] or daily_dose > ORAL_CYC["daily_max"]:
+                any_errors = True
+                oral_invalid = True
+
+            if not oral_invalid:
+                effective_stop = min(oral_stop, encounter_date)
+                days_on_drug = (effective_stop - oral_start).days
+                course_total = float(days_on_drug) * float(daily_dose)
+
+                if course_total < ORAL_CYC["course_min"]:
+                    any_errors = True
+                    oral_summary.append(
+                        f"course #{i+1}: excluded (course total {int(course_total)} < {ORAL_CYC['course_min']})"
+                    )
+                else:
+                    course_total_used = clip_course_total(course_total, ORAL_CYC["course_max"])
+                    interval_since_stop = (encounter_date - oral_stop).days
+                    if interval_since_stop < 0:
+                        interval_since_stop = 0
+
+                    oral_course_itises.append(
+                        compute_itis(interval_since_stop, course_total_used, ORAL_CYC)
+                    )
+                    oral_summary.append(
+                        f"course #{i+1}: {daily_dose}/day, {date_display(oral_start)} to {date_display(oral_stop)}, cumulative dose {int(course_total_used)}"
+                    )
+            else:
+                oral_summary.append(f"course #{i+1}: excluded due to invalid input(s).")
+
+        if oral_course_itises:
+            overall_components.append(combine_itis(oral_course_itises))
+            summary_lines.append("- Cyclophosphamide (Oral): " + "; ".join(oral_summary))
+        else:
+            summary_lines.append("- Cyclophosphamide (Oral): no valid course included.")
+
+    # --------------------------------------------------------
+    # Azathioprine / MMF
+    # --------------------------------------------------------
+    def calculate_decay_oral_medication(
+        med_name,
+        cfg,
+        received_key,
+        n_courses_key,
+        start_prefix,
+        stop_prefix,
+        not_stopped_prefix,
+        dose_prefix,
+    ):
+        nonlocal any_errors, overall_components, summary_lines, encounter_date
+
+        if st.session_state.get(received_key, "No") != "Yes":
+            return
+
+        n_courses = int(st.session_state.get(n_courses_key, 1))
+        med_course_itises = []
+        med_summary = []
+
+        for i in range(n_courses):
+            med_start = st.session_state.get(f"{start_prefix}_{i}", encounter_date)
+            med_not_stopped = st.session_state.get(f"{not_stopped_prefix}_{i}", False)
+            med_stop = encounter_date if med_not_stopped else st.session_state.get(f"{stop_prefix}_{i}", encounter_date)
+            med_daily_dose = int(st.session_state.get(f"{dose_prefix}_{i}", cfg["default_dose"]))
+
+            med_invalid = False
+            if is_future_date(med_start) or is_after_encounter(med_start, encounter_date):
+                any_errors = True
+                med_invalid = True
+            if is_future_date(med_stop) or is_after_encounter(med_stop, encounter_date):
+                any_errors = True
+                med_invalid = True
+            if med_stop < med_start:
+                any_errors = True
+                med_invalid = True
+            if med_daily_dose < cfg["daily_min"] or med_daily_dose > cfg["daily_max"]:
+                any_errors = True
+                med_invalid = True
+
+            if not med_invalid:
+                if encounter_date <= med_stop:
+                    med_itis = calculate_linear_score(
+                        med_daily_dose,
+                        cfg["dose1"],
+                        cfg["dose2"],
+                        cfg["min_score"],
+                        cfg["max_score"],
+                    )
+                else:
+                    interval_since_stop = (encounter_date - med_stop).days
+                    if interval_since_stop < 0:
+                        interval_since_stop = 0
+
+                    med_itis = compute_itis(interval_since_stop, med_daily_dose, cfg)
+
+                med_course_itises.append(med_itis)
+                med_summary.append(
+                    f"course #{i+1}: {med_daily_dose}/day, {date_display(med_start)} to {date_display(med_stop)}"
+                )
+            else:
+                med_summary.append(f"course #{i+1}: excluded due to invalid input(s).")
+
+        if med_course_itises:
+            overall_components.append(combine_itis(med_course_itises))
+            summary_lines.append(f"- {med_name}: " + "; ".join(med_summary))
+        else:
+            summary_lines.append(f"- {med_name}: no valid course included.")
+
+    calculate_decay_oral_medication(
+        med_name="Azathioprine",
+        cfg=AZATHIOPRINE,
+        received_key="aza_received",
+        n_courses_key="aza_n_courses",
+        start_prefix="aza_start",
+        stop_prefix="aza_stop",
+        not_stopped_prefix="aza_not_stopped",
+        dose_prefix="aza_daily_dose",
+    )
+
+    calculate_decay_oral_medication(
+        med_name="Mycophenolate mofetil",
+        cfg=MYCOPHENOLATE_MOFETIL,
+        received_key="mmf_received",
+        n_courses_key="mmf_n_courses",
+        start_prefix="mmf_start",
+        stop_prefix="mmf_stop",
+        not_stopped_prefix="mmf_not_stopped",
+        dose_prefix="mmf_daily_dose",
+    )
+
+    # --------------------------------------------------------
+    # Prednisolone
+    # --------------------------------------------------------
+    if st.session_state.get("prd_received", "No") == "Yes":
+        n_prd_courses = int(st.session_state.get("prd_n_courses", 1))
+        prd_course_itises = []
+        prd_summary = []
+
+        for i in range(n_prd_courses):
+            prd_start = st.session_state.get(f"prd_start_{i}", encounter_date)
+            prd_not_stopped = st.session_state.get(f"prd_not_stopped_{i}", False)
+            prd_stop = encounter_date if prd_not_stopped else st.session_state.get(f"prd_stop_{i}", encounter_date)
+            dose_cat = st.session_state.get(f"prd_dose_cat_{i}", PREDNISOLONE["default_category"])
+
             prd_invalid = False
             if is_future_date(prd_start) or is_after_encounter(prd_start, encounter_date):
-                st.error(
-                    f"Course #{i+1}: Start date must be on or before the encounter/current date and cannot be a future date. "
-                    "This prednisolone course is excluded."
-                )
                 any_errors = True
                 prd_invalid = True
-
             if is_future_date(prd_stop) or is_after_encounter(prd_stop, encounter_date):
-                st.error(
-                    f"Course #{i+1}: Stop date must be on or before the encounter/current date and cannot be a future date. "
-                    "This prednisolone course is excluded."
-                )
                 any_errors = True
                 prd_invalid = True
-
             if prd_stop < prd_start:
-                st.error(
-                    f"Course #{i+1}: Stop date must be on or after start date. "
-                    "This prednisolone course is excluded."
-                )
                 any_errors = True
                 prd_invalid = True
-
             if dose_cat not in PREDNISOLONE["A_map"]:
-                st.error(
-                    f"Course #{i+1}: Invalid dose category selected. This prednisolone course is excluded."
-                )
                 any_errors = True
                 prd_invalid = True
 
@@ -503,7 +665,6 @@ def render_prednisolone_section():
                     prd_itis = float(PREDNISOLONE["A_map"][dose_cat])
                 else:
                     interval_since_stop = (encounter_date - prd_stop).days
-
                     if interval_since_stop < 0:
                         prd_itis = 0.0
                     else:
@@ -514,352 +675,249 @@ def render_prednisolone_section():
                         prd_itis = float(np.clip(sigmoid_curve(interval_since_stop, A, n, d), 0.0, 1.0))
 
                 prd_course_itises.append(prd_itis)
-
-            if i < int(n_prd_courses) - 1:
-                st.divider()
+                prd_summary.append(
+                    f"course #{i+1}: {dose_cat}, {date_display(prd_start)} to {date_display(prd_stop)}"
+                )
+            else:
+                prd_summary.append(f"course #{i+1}: excluded due to invalid input(s).")
 
         if prd_course_itises:
             overall_components.append(combine_itis(prd_course_itises))
+            summary_lines.append("- Prednisolone: " + "; ".join(prd_summary))
         else:
-            st.warning("No valid Prednisolone courses were included.")
+            summary_lines.append("- Prednisolone: no valid course included.")
+
+    cumulative_itis = combine_itis(overall_components)
+
+    return {
+        "encounter_date": encounter_date,
+        "cumulative_itis": cumulative_itis,
+        "any_errors": any_errors,
+        "summary_lines": summary_lines,
+    }
+
+# ============================================================
+# Result page
+# ============================================================
+if st.session_state.show_result_page and st.session_state.result_payload is not None:
+    result = st.session_state.result_payload
+
+    st.title("Estimated Cumulative ITIS Result")
+    st.caption(f"Encounter / Current Date: {date_display(result['encounter_date'])}")
+
+    st.metric("Estimated Cumulative ITIS", f"≈ {result['cumulative_itis']:.2f}")
+
+    st.subheader("Summary of Entered Medications")
+    if result["summary_lines"]:
+        for line in result["summary_lines"]:
+            st.write(line)
     else:
-        st.caption("Not included (not received).")
+        st.write("No medications were entered.")
+
+    if result["any_errors"]:
+        st.warning("One or more inputs were invalid. Some medications/courses may have been excluded.")
+
+    if st.button("Back to entry form"):
+        st.session_state.show_result_page = False
+        st.rerun()
 
 # ============================================================
-# UI
+# Entry page
 # ============================================================
-st.title("Immunosuppressive Therapy Intensity Score (ITIS)")
+else:
+    st.title("Immunosuppressive Therapy Intensity Score (ITIS)")
+    st.subheader("Encounter / Current Date")
+    st.caption("Please enter/select dates in DD/MM/YYYY format.")
 
-st.subheader("Encounter / Current Date")
-st.caption("Please enter/select dates in DD/MM/YYYY format.")
-
-encounter_date = st.date_input(
-    "Date of encounter / current date (DD/MM/YYYY)",
-    value=date.today(),
-    format="DD/MM/YYYY",
-    key="global_encounter_date",
-)
-
-if is_future_date(encounter_date):
-    st.error("Encounter / current date cannot be in the future. Please select today or an earlier date.")
-    st.stop()
-
-st.divider()
-
-any_errors = False
-overall_components = []
-
-# ============================================================
-# IV meds: per-dose validation ERROR; course total above upper => CLIP
-# ============================================================
-for med_name, cfg in MEDS_IV.items():
-    st.subheader(med_name)
-
-    received = st.radio(
-        f"Received {med_name}?",
-        options=["No", "Yes"],
-        index=0,
-        horizontal=True,
-        key=f"{med_name}_received",
+    st.date_input(
+        "Date of encounter / current date (DD/MM/YYYY)",
+        value=date.today(),
+        format="DD/MM/YYYY",
+        key="global_encounter_date",
     )
 
-    if received == "No":
-        st.caption("Not included (not received).")
-        st.divider()
-        continue
+    encounter_date = st.session_state["global_encounter_date"]
 
-    n_doses = st.number_input(
-        "How many IV doses were given?",
-        min_value=1,
-        max_value=int(cfg["max_n_doses"]),
-        value=1,
-        step=1,
-        key=f"{med_name}_n_doses",
-    )
-
-    entries = []
-    invalid_found = False
-
-    for i in range(int(n_doses)):
-        c1, c2 = st.columns(2)
-        with c1:
-            dose = st.number_input(
-                f"Dose #{i+1} ({cfg['units']})",
-                min_value=0,
-                value=int(cfg["default_dose"]),
-                step=int(cfg["default_step"]),
-                format="%d",
-                key=f"{med_name}_dose_{i}",
-            )
-        with c2:
-            iv_date = st.date_input(
-                f"IV date #{i+1} (DD/MM/YYYY)",
-                value=encounter_date,
-                max_value=encounter_date,
-                format="DD/MM/YYYY",
-                key=f"{med_name}_date_{i}",
-            )
-
-        if is_future_date(iv_date) or is_after_encounter(iv_date, encounter_date):
-            st.error(
-                f"{med_name} IV date #{i+1} must be on or before the encounter/current date and cannot be a future date."
-            )
-            any_errors = True
-            invalid_found = True
-
-        if not dose_is_valid(int(dose), cfg["dose1"], cfg["dose2"]):
-            st.error(
-                f"{med_name} Dose #{i+1} = {int(dose)} is outside the allowed range "
-                f"({cfg['dose1']}–{cfg['dose2']}). {med_name} will be excluded."
-            )
-            any_errors = True
-            invalid_found = True
-
-        entries.append((iv_date, int(dose)))
-
-    if invalid_found:
-        st.warning(f"{med_name} was excluded due to invalid dose(s) and/or date(s).")
-        st.divider()
-        continue
-
-    entries.sort(key=lambda x: x[0])
-    courses = group_into_courses(entries, window_days=int(cfg["course_window_days"]))
-
-    med_course_itises = []
-    for course_start_date, course_sum_dose in courses:
-        if is_future_date(course_start_date) or is_after_encounter(course_start_date, encounter_date):
-            st.error(
-                f"{med_name} course start date {date_display(course_start_date)} is invalid (after encounter/current date or future). "
-                f"{med_name} is excluded."
-            )
-            any_errors = True
-            med_course_itises = []
-            break
-
-        course_dose_used = clip_course_total(course_sum_dose, cfg["course_cap_dose"])
-
-        if course_dose_used < float(cfg["course_min_dose"]):
-            st.error(
-                f"{med_name} course starting {date_display(course_start_date)} has cumulative dose "
-                f"{int(course_dose_used)} (<{cfg['course_min_dose']}). This course is excluded."
-            )
-            any_errors = True
-            continue
-
-        days_since = (encounter_date - course_start_date).days
-        if days_since < 0:
-            st.error(
-                f"Invalid dates for {med_name} course starting {date_display(course_start_date)}: "
-                "encounter/current date must be on or after the IV date. This course is excluded."
-            )
-            any_errors = True
-            continue
-
-        med_course_itises.append(compute_itis(days_since, course_dose_used, cfg))
-
-    if med_course_itises:
-        overall_components.append(combine_itis(med_course_itises))
-    else:
-        st.warning(f"No valid {med_name} courses were included.")
+    if is_future_date(encounter_date):
+        st.error("Encounter / current date cannot be in the future. Please select today or an earlier date.")
+        st.stop()
 
     st.divider()
 
-# ============================================================
-# Oral Cyclophosphamide
-# ============================================================
-st.subheader("Cyclophosphamide (Oral)")
+    # --------------------------------------------------------
+    # IV meds
+    # --------------------------------------------------------
+    for med_name, cfg in MEDS_IV.items():
+        st.subheader(med_name)
 
-oral_received = st.radio(
-    "Received Oral Cyclophosphamide?",
-    options=["No", "Yes"],
-    index=0,
-    horizontal=True,
-    key="oral_cyc_received",
-)
-
-if oral_received == "Yes":
-    st.info(
-        "If the medication has not been stopped yet, set the Stop date to the Encounter/Current date "
-        "to estimate the current approximate score."
-    )
-
-    n_oral_courses = st.number_input(
-        "How many oral cyclophosphamide courses were given?",
-        min_value=1,
-        max_value=int(ORAL_CYC["max_n_courses"]),
-        value=1,
-        step=1,
-        key="oral_cyc_n_courses",
-    )
-
-    oral_course_itises = []
-
-    for i in range(int(n_oral_courses)):
-        st.markdown(f"**Course #{i+1}**")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            oral_start = st.date_input(
-                f"Start date #{i+1} (DD/MM/YYYY)",
-                value=encounter_date,
-                max_value=encounter_date,
-                format="DD/MM/YYYY",
-                key=f"oral_cyc_start_{i}",
-            )
-
-        not_stopped = st.checkbox(
-            f"Course #{i+1} not stopped yet (use Encounter date as Stop date)",
-            value=False,
-            key=f"oral_cyc_not_stopped_{i}",
+        received = st.radio(
+            f"Received {med_name}?",
+            options=["No", "Yes"],
+            index=0,
+            horizontal=True,
+            key=f"{med_name}_received",
         )
 
-        with c2:
-            if not_stopped:
-                oral_stop = encounter_date
-                st.date_input(
-                    f"Stop date #{i+1} (DD/MM/YYYY)",
-                    value=oral_stop,
-                    disabled=True,
-                    format="DD/MM/YYYY",
-                    key=f"oral_cyc_stop_disabled_{i}",
+        if received == "No":
+            st.caption("Not included (not received).")
+            st.divider()
+            continue
+
+        st.number_input(
+            "How many IV doses were given?",
+            min_value=1,
+            max_value=int(cfg["max_n_doses"]),
+            value=1,
+            step=1,
+            key=f"{med_name}_n_doses",
+        )
+
+        for i in range(int(st.session_state[f"{med_name}_n_doses"])):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.number_input(
+                    f"Dose #{i+1} ({cfg['units']})",
+                    min_value=0,
+                    value=int(cfg["default_dose"]),
+                    step=int(cfg["default_step"]),
+                    format="%d",
+                    key=f"{med_name}_dose_{i}",
                 )
-            else:
-                oral_stop = st.date_input(
-                    f"Stop date #{i+1} (DD/MM/YYYY)",
+            with c2:
+                st.date_input(
+                    f"IV date #{i+1} (DD/MM/YYYY)",
                     value=encounter_date,
                     max_value=encounter_date,
                     format="DD/MM/YYYY",
-                    key=f"oral_cyc_stop_{i}",
+                    key=f"{med_name}_date_{i}",
                 )
 
-        daily_dose = st.number_input(
-            f"Daily dose #{i+1} ({ORAL_CYC['daily_dose_units']})",
-            min_value=0,
-            value=75,
-            step=25,
-            format="%d",
-            key=f"oral_cyc_daily_dose_{i}",
+        st.divider()
+
+    # --------------------------------------------------------
+    # Oral Cyclophosphamide
+    # --------------------------------------------------------
+    st.subheader("Cyclophosphamide (Oral)")
+
+    oral_received = st.radio(
+        "Received Oral Cyclophosphamide?",
+        options=["No", "Yes"],
+        index=0,
+        horizontal=True,
+        key="oral_cyc_received",
+    )
+
+    if oral_received == "Yes":
+        st.info(
+            "If the medication has not been stopped yet, set the Stop date to the Encounter/Current date "
+            "to estimate the current approximate score."
         )
 
-        oral_invalid = False
-        if is_future_date(oral_start) or is_after_encounter(oral_start, encounter_date):
-            st.error(
-                f"Course #{i+1}: Start date must be on or before the encounter/current date and cannot be a future date. "
-                "This oral cyclophosphamide course is excluded."
-            )
-            any_errors = True
-            oral_invalid = True
+        st.number_input(
+            "How many oral cyclophosphamide courses were given?",
+            min_value=1,
+            max_value=int(ORAL_CYC["max_n_courses"]),
+            value=1,
+            step=1,
+            key="oral_cyc_n_courses",
+        )
 
-        if is_future_date(oral_stop) or is_after_encounter(oral_stop, encounter_date):
-            st.error(
-                f"Course #{i+1}: Stop date must be on or before the encounter/current date and cannot be a future date. "
-                "This oral cyclophosphamide course is excluded."
-            )
-            any_errors = True
-            oral_invalid = True
+        for i in range(int(st.session_state["oral_cyc_n_courses"])):
+            st.markdown(f"**Course #{i+1}**")
 
-        if oral_stop < oral_start:
-            st.error(
-                f"Course #{i+1}: Stop date must be on or after start date. "
-                "This oral cyclophosphamide course is excluded."
-            )
-            any_errors = True
-            oral_invalid = True
-
-        if int(daily_dose) < ORAL_CYC["daily_min"] or int(daily_dose) > ORAL_CYC["daily_max"]:
-            st.error(
-                f"Course #{i+1}: Daily dose = {int(daily_dose)} is outside the allowed range "
-                f"({ORAL_CYC['daily_min']}–{ORAL_CYC['daily_max']}). "
-                "This oral cyclophosphamide course is excluded."
-            )
-            any_errors = True
-            oral_invalid = True
-
-        if not oral_invalid:
-            effective_stop = min(oral_stop, encounter_date)
-            days_on_drug = (effective_stop - oral_start).days
-            course_total = float(days_on_drug) * float(int(daily_dose))
-
-            if course_total < ORAL_CYC["course_min"]:
-                st.error(
-                    f"Course #{i+1}: Oral cyclophosphamide course total is {int(course_total)}, "
-                    f"which is <{ORAL_CYC['course_min']}. This course is excluded."
+            c1, c2 = st.columns(2)
+            with c1:
+                st.date_input(
+                    f"Start date #{i+1} (DD/MM/YYYY)",
+                    value=encounter_date,
+                    max_value=encounter_date,
+                    format="DD/MM/YYYY",
+                    key=f"oral_cyc_start_{i}",
                 )
-                any_errors = True
-            else:
-                course_total_used = clip_course_total(course_total, ORAL_CYC["course_max"])
-                if course_total > ORAL_CYC["course_max"]:
-                    st.info(
-                        f"Course #{i+1}: Oral cyclophosphamide course_total (before cap) = {int(course_total)}. "
-                        f"Using capped course_total = {int(course_total_used)}."
+
+            st.checkbox(
+                f"Course #{i+1} not stopped yet (use Encounter date as Stop date)",
+                value=False,
+                key=f"oral_cyc_not_stopped_{i}",
+            )
+
+            with c2:
+                if st.session_state[f"oral_cyc_not_stopped_{i}"]:
+                    st.date_input(
+                        f"Stop date #{i+1} (DD/MM/YYYY)",
+                        value=encounter_date,
+                        disabled=True,
+                        format="DD/MM/YYYY",
+                        key=f"oral_cyc_stop_disabled_{i}",
+                    )
+                else:
+                    st.date_input(
+                        f"Stop date #{i+1} (DD/MM/YYYY)",
+                        value=encounter_date,
+                        max_value=encounter_date,
+                        format="DD/MM/YYYY",
+                        key=f"oral_cyc_stop_{i}",
                     )
 
-                interval_since_stop = (encounter_date - oral_stop).days
-                if interval_since_stop < 0:
-                    interval_since_stop = 0
+            st.number_input(
+                f"Daily dose #{i+1} ({ORAL_CYC['daily_dose_units']})",
+                min_value=0,
+                value=75,
+                step=25,
+                format="%d",
+                key=f"oral_cyc_daily_dose_{i}",
+            )
 
-                oral_course_itises.append(
-                    compute_itis(interval_since_stop, course_total_used, ORAL_CYC)
-                )
-
-        if i < int(n_oral_courses) - 1:
-            st.divider()
-
-    if oral_course_itises:
-        overall_components.append(combine_itis(oral_course_itises))
+            if i < int(st.session_state["oral_cyc_n_courses"]) - 1:
+                st.divider()
     else:
-        st.warning("No valid Oral Cyclophosphamide courses were included.")
-else:
-    st.caption("Not included (not received).")
+        st.caption("Not included (not received).")
 
-st.divider()
+    st.divider()
 
-# ============================================================
-# Azathioprine
-# ============================================================
-render_decay_oral_medication_section(
-    med_name="Azathioprine",
-    cfg=AZATHIOPRINE,
-    received_key="aza_received",
-    n_courses_key="aza_n_courses",
-    start_prefix="aza_start",
-    stop_prefix="aza_stop",
-    stop_disabled_prefix="aza_stop_disabled",
-    not_stopped_prefix="aza_not_stopped",
-    dose_prefix="aza_daily_dose",
-)
+    # --------------------------------------------------------
+    # Azathioprine
+    # --------------------------------------------------------
+    render_decay_oral_medication_section(
+        med_name="Azathioprine",
+        cfg=AZATHIOPRINE,
+        received_key="aza_received",
+        n_courses_key="aza_n_courses",
+        start_prefix="aza_start",
+        stop_prefix="aza_stop",
+        stop_disabled_prefix="aza_stop_disabled",
+        not_stopped_prefix="aza_not_stopped",
+        dose_prefix="aza_daily_dose",
+    )
 
-st.divider()
+    st.divider()
 
-# ============================================================
-# Mycophenolate mofetil
-# ============================================================
-render_decay_oral_medication_section(
-    med_name="Mycophenolate mofetil",
-    cfg=MYCOPHENOLATE_MOFETIL,
-    received_key="mmf_received",
-    n_courses_key="mmf_n_courses",
-    start_prefix="mmf_start",
-    stop_prefix="mmf_stop",
-    stop_disabled_prefix="mmf_stop_disabled",
-    not_stopped_prefix="mmf_not_stopped",
-    dose_prefix="mmf_daily_dose",
-)
+    # --------------------------------------------------------
+    # Mycophenolate mofetil
+    # --------------------------------------------------------
+    render_decay_oral_medication_section(
+        med_name="Mycophenolate mofetil",
+        cfg=MYCOPHENOLATE_MOFETIL,
+        received_key="mmf_received",
+        n_courses_key="mmf_n_courses",
+        start_prefix="mmf_start",
+        stop_prefix="mmf_stop",
+        stop_disabled_prefix="mmf_stop_disabled",
+        not_stopped_prefix="mmf_not_stopped",
+        dose_prefix="mmf_daily_dose",
+    )
 
-st.divider()
+    st.divider()
 
-# ============================================================
-# Prednisolone
-# ============================================================
-render_prednisolone_section()
+    # --------------------------------------------------------
+    # Prednisolone
+    # --------------------------------------------------------
+    render_prednisolone_section()
 
-# ============================================================
-# Final result
-# ============================================================
-st.divider()
+    st.divider()
 
-cumulative_itis = combine_itis(overall_components)
-st.metric("Estimated Cumulative ITIS", f"{cumulative_itis:.4f}")
-
-if any_errors:
-    st.warning("One or more inputs were invalid. Some medications/courses may have been excluded.")
+    if st.button("Submit", type="primary"):
+        result_payload = calculate_all_results()
+        st.session_state.result_payload = result_payload
+        st.session_state.show_result_page = True
+        st.rerun()
