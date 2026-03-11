@@ -133,7 +133,7 @@ MEDS_IV = {
         "A1": 0.40, "A2": 0.80,
         "d1": 15.0, "d2": 21.0,
         "vanish1": 21.0, "vanish2": 30.0,
-        "units": "Dose units",
+        "units": "mg",
         "course_window_days": 30,
         "course_cap_dose": 3000,
         "course_min_dose": 250,
@@ -146,7 +146,7 @@ MEDS_IV = {
         "A1": 0.70, "A2": 0.85,
         "d1": 160.0, "d2": 200.0,
         "vanish1": 240.0, "vanish2": 300.0,
-        "units": "Dose units",
+        "units": "mg",
         "course_window_days": 60,
         "course_cap_dose": 2000,
         "course_min_dose": 500,
@@ -159,7 +159,7 @@ MEDS_IV = {
         "A1": 0.60, "A2": 0.90,
         "d1": 40.0, "d2": 80.0,
         "vanish1": 58.0, "vanish2": 110.0,
-        "units": "Dose units",
+        "units": "mg",
         "course_window_days": 180,
         "course_cap_dose": 8000,
         "course_min_dose": 150,
@@ -176,7 +176,7 @@ ORAL_CYC = {
     "vanish1": 90.0, "vanish2": 115.0,
     "course_min": 75,
     "course_max": 25000,
-    "daily_dose_units": "Daily dose units",
+    "daily_dose_units": "mg/day",
     "daily_min": 0,
     "daily_max": 1000,
     "max_n_courses": 20,
@@ -193,7 +193,7 @@ AZATHIOPRINE = {
     "vanish2": 14.0,
     "min_score": 0.15,
     "max_score": 0.60,
-    "daily_dose_units": "Daily dose units",
+    "daily_dose_units": "mg/day",
     "daily_min": 25,
     "daily_max": 250,
     "max_n_courses": 20,
@@ -212,7 +212,7 @@ MYCOPHENOLATE_MOFETIL = {
     "vanish2": 9.0,
     "min_score": 0.25,
     "max_score": 0.75,
-    "daily_dose_units": "Daily dose units",
+    "daily_dose_units": "mg/day",
     "daily_min": 125,
     "daily_max": 4000,
     "max_n_courses": 20,
@@ -722,6 +722,12 @@ if st.session_state.show_intro_page:
         "It represents a patient's overall treatment status at a specific time point."
     )
 
+    st.subheader("Information required to calculate ITIS")
+    st.write("• Medication")
+    st.write("• Date of IV (for IV medications)")
+    st.write("• Start date and stop date(s) for oral medications")
+    st.write("• Units must be entered as mg")
+
     st.divider()
 
     if st.button("Continue", type="primary"):
@@ -970,4 +976,3 @@ else:
             st.session_state.result_payload = result_payload
             st.session_state.show_result_page = True
             st.rerun()
-
