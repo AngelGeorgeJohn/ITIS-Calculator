@@ -719,8 +719,7 @@ if st.session_state.show_intro_page:
     )
     st.write(
         "This tool can be used by clinicians, researchers, or patients. "
-        "The cumulative score derived might not be 100% accurate; however, it is an "
-        "approximate score of the current immune function status."
+        "It represents a patient's overall treatment status at a specific time point."
     )
 
     st.divider()
@@ -971,3 +970,4 @@ else:
             st.session_state.result_payload = result_payload
             st.session_state.show_result_page = True
             st.rerun()
+
