@@ -99,9 +99,6 @@ def is_future_date(d):
 def is_after_encounter(d, encounter_date):
     return d is not None and d > encounter_date
 
-def dose_is_valid(dose, low, high):
-    return (dose is not None) and (dose >= low) and (dose <= high)
-
 def clip_to_interval(value, low, high):
     return float(min(max(float(value), float(low)), float(high)))
 
@@ -155,6 +152,60 @@ def apply_absolute_age_adjustment(dose, age_years):
     return float(dose)
 
 # ============================================================
+# Lymphocyte-based dose adjustment helpers
+# Apply ONLY if lymphocyte tested == Yes and test date == encounter date
+# and only AFTER age-based adjustment
+# ============================================================
+def should_apply_lymphocyte_adjustment(lymph_tested, lymph_test_date, encounter_date, lymph_value):
+    if lymph_tested != "Yes":
+        return False
+    if lymph_test_date is None or encounter_date is None:
+        return False
+    if lymph_test_date != encounter_date:
+        return False
+    if lymph_value is None or np.isnan(lymph_value):
+        return False
+    return True
+
+def apply_relative_lymphocyte_adjustment(dose, lymph_value):
+    """
+    >1.2                -> Apply algorithm (no extra change)
+    >0.7 to <=1.2       -> Apply algorithm (no extra change)
+    >0.3 to <=0.7       -> Increase dose by 50%
+    <=0.3               -> Increase dose by 100%
+    """
+    if dose is None or np.isnan(dose):
+        return dose
+    if lymph_value is None or np.isnan(lymph_value):
+        return float(dose)
+
+    if lymph_value <= 0.3:
+        return float(dose) * 2.0
+    elif 0.3 < lymph_value <= 0.7:
+        return float(dose) * 1.5
+    else:
+        return float(dose)
+
+def apply_absolute_lymphocyte_adjustment(dose, lymph_value):
+    """
+    >1.2                -> Apply algorithm (no extra change)
+    >0.7 to <=1.2       -> Apply algorithm (no extra change)
+    >0.3 to <=0.7       -> Add 50 mg
+    <=0.3               -> Add 100 mg
+    """
+    if dose is None or np.isnan(dose):
+        return dose
+    if lymph_value is None or np.isnan(lymph_value):
+        return float(dose)
+
+    if lymph_value <= 0.3:
+        return float(dose) + 100.0
+    elif 0.3 < lymph_value <= 0.7:
+        return float(dose) + 50.0
+    else:
+        return float(dose)
+
+# ============================================================
 # Oral medication helpers
 # ============================================================
 def calculate_linear_score(dose, min_dose, max_dose, min_score, max_score):
@@ -190,6 +241,7 @@ MEDS_IV = {
         "default_step": 50,
         "default_dose": 250,
         "age_adjustment_type": "relative",
+        "lymphocyte_adjustment_type": "relative",
     },
     "Rituximab": {
         "dose1": 500, "dose2": 2000,
@@ -204,6 +256,7 @@ MEDS_IV = {
         "default_step": 100,
         "default_dose": 500,
         "age_adjustment_type": "relative",
+        "lymphocyte_adjustment_type": "relative",
     },
     "Cyclophosphamide (IV)": {
         "dose1": 150, "dose2": 8000,
@@ -218,6 +271,7 @@ MEDS_IV = {
         "default_step": 50,
         "default_dose": 150,
         "age_adjustment_type": "relative",
+        "lymphocyte_adjustment_type": "relative",
     },
 }
 
@@ -233,6 +287,7 @@ ORAL_CYC = {
     "daily_max": 1000,
     "max_n_courses": 20,
     "age_adjustment_type": "relative",
+    "lymphocyte_adjustment_type": "relative",
 }
 
 AZATHIOPRINE = {
@@ -253,6 +308,7 @@ AZATHIOPRINE = {
     "default_dose": 25,
     "default_step": 25,
     "age_adjustment_type": "absolute",
+    "lymphocyte_adjustment_type": "absolute",
 }
 
 MYCOPHENOLATE_MOFETIL = {
@@ -273,6 +329,7 @@ MYCOPHENOLATE_MOFETIL = {
     "default_dose": 125,
     "default_step": 125,
     "age_adjustment_type": "relative",
+    "lymphocyte_adjustment_type": "relative",
 }
 
 PREDNISOLONE = {
@@ -477,6 +534,21 @@ def calculate_all_results():
     dob = st.session_state.get("date_of_birth")
     age_at_encounter = calculate_age_at_encounter(dob, encounter_date)
 
+    lymph_tested = st.session_state.get("lymphocyte_tested", "No")
+    lymph_test_date = st.session_state.get("lymphocyte_test_date", None)
+    lymphocyte_count = st.session_state.get("lymphocyte_count", None)
+    try:
+        lymphocyte_count = float(lymphocyte_count) if lymphocyte_count is not None else np.nan
+    except Exception:
+        lymphocyte_count = np.nan
+
+    apply_lymph = should_apply_lymphocyte_adjustment(
+        lymph_tested=lymph_tested,
+        lymph_test_date=lymph_test_date,
+        encounter_date=encounter_date,
+        lymph_value=lymphocyte_count,
+    )
+
     any_errors = False
     overall_components = []
     summary_lines = []
@@ -507,10 +579,18 @@ def calculate_all_results():
                 any_errors = True
                 invalid_found = True
 
+            adjusted_dose = float(raw_dose)
+
             if cfg.get("age_adjustment_type") == "relative":
-                adjusted_dose = apply_relative_age_adjustment(raw_dose, age_at_encounter)
-            else:
-                adjusted_dose = float(raw_dose)
+                adjusted_dose = apply_relative_age_adjustment(adjusted_dose, age_at_encounter)
+            elif cfg.get("age_adjustment_type") == "absolute":
+                adjusted_dose = apply_absolute_age_adjustment(adjusted_dose, age_at_encounter)
+
+            if apply_lymph:
+                if cfg.get("lymphocyte_adjustment_type") == "relative":
+                    adjusted_dose = apply_relative_lymphocyte_adjustment(adjusted_dose, lymphocyte_count)
+                elif cfg.get("lymphocyte_adjustment_type") == "absolute":
+                    adjusted_dose = apply_absolute_lymphocyte_adjustment(adjusted_dose, lymphocyte_count)
 
             adjusted_dose = clip_to_interval(adjusted_dose, cfg["dose1"], cfg["dose2"])
 
@@ -538,7 +618,6 @@ def calculate_all_results():
                 continue
 
             days_since = (encounter_date - course_last_date).days
-
             if days_since < 0:
                 days_since = 0
 
@@ -579,7 +658,19 @@ def calculate_all_results():
                 oral_invalid = True
 
             if not oral_invalid:
-                adjusted_daily_dose = apply_relative_age_adjustment(raw_daily_dose, age_at_encounter)
+                adjusted_daily_dose = float(raw_daily_dose)
+
+                if ORAL_CYC.get("age_adjustment_type") == "relative":
+                    adjusted_daily_dose = apply_relative_age_adjustment(adjusted_daily_dose, age_at_encounter)
+                elif ORAL_CYC.get("age_adjustment_type") == "absolute":
+                    adjusted_daily_dose = apply_absolute_age_adjustment(adjusted_daily_dose, age_at_encounter)
+
+                if apply_lymph:
+                    if ORAL_CYC.get("lymphocyte_adjustment_type") == "relative":
+                        adjusted_daily_dose = apply_relative_lymphocyte_adjustment(adjusted_daily_dose, lymphocyte_count)
+                    elif ORAL_CYC.get("lymphocyte_adjustment_type") == "absolute":
+                        adjusted_daily_dose = apply_absolute_lymphocyte_adjustment(adjusted_daily_dose, lymphocyte_count)
+
                 adjusted_daily_dose = clip_to_interval(
                     adjusted_daily_dose,
                     ORAL_CYC["daily_min"],
@@ -629,7 +720,7 @@ def calculate_all_results():
         not_stopped_prefix,
         dose_prefix,
     ):
-        nonlocal any_errors, overall_components, summary_lines, encounter_date, age_at_encounter
+        nonlocal any_errors, overall_components, summary_lines, encounter_date, age_at_encounter, apply_lymph, lymphocyte_count
 
         if st.session_state.get(received_key, "No") != "Yes":
             return
@@ -659,12 +750,18 @@ def calculate_all_results():
                 med_invalid = True
 
             if not med_invalid:
+                adjusted_daily_dose = float(raw_daily_dose)
+
                 if cfg.get("age_adjustment_type") == "relative":
-                    adjusted_daily_dose = apply_relative_age_adjustment(raw_daily_dose, age_at_encounter)
+                    adjusted_daily_dose = apply_relative_age_adjustment(adjusted_daily_dose, age_at_encounter)
                 elif cfg.get("age_adjustment_type") == "absolute":
-                    adjusted_daily_dose = apply_absolute_age_adjustment(raw_daily_dose, age_at_encounter)
-                else:
-                    adjusted_daily_dose = float(raw_daily_dose)
+                    adjusted_daily_dose = apply_absolute_age_adjustment(adjusted_daily_dose, age_at_encounter)
+
+                if apply_lymph:
+                    if cfg.get("lymphocyte_adjustment_type") == "relative":
+                        adjusted_daily_dose = apply_relative_lymphocyte_adjustment(adjusted_daily_dose, lymphocyte_count)
+                    elif cfg.get("lymphocyte_adjustment_type") == "absolute":
+                        adjusted_daily_dose = apply_absolute_lymphocyte_adjustment(adjusted_daily_dose, lymphocyte_count)
 
                 adjusted_daily_dose = clip_to_interval(
                     adjusted_daily_dose,
@@ -783,6 +880,10 @@ def calculate_all_results():
         "encounter_date": encounter_date,
         "date_of_birth": dob,
         "age_at_encounter": age_at_encounter,
+        "lymphocyte_tested": lymph_tested,
+        "lymphocyte_test_date": lymph_test_date,
+        "lymphocyte_count": lymphocyte_count,
+        "lymphocyte_applied": apply_lymph,
         "cumulative_itis": cumulative_itis,
         "any_errors": any_errors,
         "summary_lines": summary_lines,
@@ -810,6 +911,8 @@ if st.session_state.show_intro_page:
 
     st.subheader("Information required to calculate ITIS")
     st.write("• Date of birth")
+    st.write("• Encounter / current date")
+    st.write("• Optional lymphocyte count")
     st.write("• Medication")
     st.write("• Date of IV (for IV medications)")
     st.write("• Start date and stop date(s) for oral medications")
@@ -838,12 +941,22 @@ elif st.session_state.show_result_page and st.session_state.result_payload is no
     if result.get("age_at_encounter") is not None and not np.isnan(result["age_at_encounter"]):
         st.write(f"**Age at encounter:** {result['age_at_encounter']:.1f} years")
 
+    st.write(f"**Lymphocyte count tested:** {result.get('lymphocyte_tested', 'No')}")
+    if result.get("lymphocyte_tested") == "Yes":
+        if result.get("lymphocyte_test_date") is not None:
+            st.write(f"**Lymphocyte test date:** {date_display(result['lymphocyte_test_date'])}")
+        if result.get("lymphocyte_count") is not None and not np.isnan(result["lymphocyte_count"]):
+            st.write(f"**Lymphocyte count:** {result['lymphocyte_count']:.2f} ×10⁹/L")
+
     st.subheader("Summary of Entered Medications")
     if result["summary_lines"]:
         for line in result["summary_lines"]:
             st.write(line)
     else:
         st.write("No medications were entered.")
+
+    if result["lymphocyte_tested"] == "Yes" and not result["lymphocyte_applied"]:
+        st.info("Lymphocyte-based dose adjustment was not applied because the lymphocyte test date did not match the encounter date, or the lymphocyte count was invalid/missing.")
 
     if result["any_errors"]:
         st.warning("One or more inputs were invalid. Some medications/courses may have been excluded.")
@@ -899,6 +1012,37 @@ else:
     if dob > encounter_date:
         st.error("Date of birth cannot be after the encounter / current date.")
         st.stop()
+
+    st.divider()
+
+    st.subheader("Lymphocyte count")
+    st.radio(
+        "Lymphocyte count tested?",
+        options=["No", "Yes"],
+        index=0,
+        horizontal=True,
+        key="lymphocyte_tested",
+    )
+
+    if st.session_state["lymphocyte_tested"] == "Yes":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.date_input(
+                "Date of test (DD/MM/YYYY)",
+                value=encounter_date,
+                max_value=encounter_date,
+                format="DD/MM/YYYY",
+                key="lymphocyte_test_date",
+            )
+        with c2:
+            st.number_input(
+                "Lymphocyte count (×10⁹/L)",
+                min_value=0.0,
+                value=1.20,
+                step=0.1,
+                format="%.2f",
+                key="lymphocyte_count",
+            )
 
     st.divider()
 
