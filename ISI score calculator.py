@@ -2,6 +2,11 @@ import streamlit as st
 import numpy as np
 from datetime import date
 
+# Allow unrestricted laboratory dates in the UI.
+# Streamlit date_input still needs finite min/max values.
+LAB_DATE_MIN = date(1900, 1, 1)
+LAB_DATE_MAX = date(2100, 12, 31)
+
 # ============================================================
 # Page config
 # ============================================================
@@ -180,16 +185,14 @@ def has_valid_lymphocyte_result(lymph_tested, lymph_test_date, encounter_date, l
     Lymphocyte validity:
     - lymphocyte tested == Yes
     - test date present
-    - test date is not in the future
     - lymphocyte value is valid
 
     The lymphocyte test date may be before OR after the encounter date.
+    No UI restriction is applied based on encounter date or today's date.
     """
     if lymph_tested != "Yes":
         return False
     if lymph_test_date is None:
-        return False
-    if is_future_date(lymph_test_date):
         return False
     if lymph_value is None or np.isnan(lymph_value):
         return False
@@ -284,9 +287,6 @@ def apply_cd19_adjustment_for_rituximab(days_since_iv, iv_date, cd19_value, cd19
         return days_since_iv, False
 
     if iv_date is None or cd19_test_date is None:
-        return days_since_iv, False
-
-    if is_future_date(cd19_test_date):
         return days_since_iv, False
 
     interval_test_from_iv = (cd19_test_date - iv_date).days
@@ -1213,7 +1213,7 @@ elif st.session_state.show_result_page and st.session_state.result_payload is no
         st.write("No medications were entered.")
 
     if result["lymphocyte_tested"] == "Yes" and not result["lymphocyte_applied"]:
-        st.info("Lymphocyte-based dose adjustment was not applied because the lymphocyte count was invalid or missing, or the lymphocyte test date was in the future.")
+        st.info("Lymphocyte-based dose adjustment was not applied because the lymphocyte count was invalid or missing, or the lymphocyte test date did not meet the medication-specific adjustment rule.")
 
     if result["any_errors"]:
         st.warning("One or more inputs were invalid. Some medications or courses may have been excluded.")
@@ -1290,18 +1290,18 @@ else:
         c1, c2 = st.columns(2)
         with c1:
             # Lymphocyte test date may be before OR after the encounter date.
-            # It is limited only by today's date to prevent future lab dates.
-            lymph_default_date = st.session_state.get("lymphocyte_test_date", date.today())
-            if lymph_default_date is None or lymph_default_date > date.today():
-                lymph_default_date = date.today()
+            # No restriction is applied based on encounter date or today's date.
+            lymph_default_date = st.session_state.get("lymphocyte_test_date", encounter_date)
+            if lymph_default_date is None:
+                lymph_default_date = encounter_date
 
             lymph_date_input = st.date_input(
                 "Date of test (DD/MM/YYYY)",
                 value=lymph_default_date,
-                min_value=date(1900, 1, 1),
-                max_value=date.today(),
+                min_value=LAB_DATE_MIN,
+                max_value=LAB_DATE_MAX,
                 format="DD/MM/YYYY",
-                key="lymphocyte_test_date_widget_v2",
+                key="lymphocyte_test_date_widget_v3",
             )
             st.session_state["lymphocyte_test_date"] = lymph_date_input
 
@@ -1330,18 +1330,18 @@ else:
         c1, c2 = st.columns(2)
         with c1:
             # CD19 test date may be before OR after the encounter date.
-            # It is limited only by today's date to prevent future lab dates.
-            cd19_default_date = st.session_state.get("cd19_test_date", date.today())
-            if cd19_default_date is None or cd19_default_date > date.today():
-                cd19_default_date = date.today()
+            # No restriction is applied based on encounter date or today's date.
+            cd19_default_date = st.session_state.get("cd19_test_date", encounter_date)
+            if cd19_default_date is None:
+                cd19_default_date = encounter_date
 
             cd19_date_input = st.date_input(
                 "CD19 test date (DD/MM/YYYY)",
                 value=cd19_default_date,
-                min_value=date(1900, 1, 1),
-                max_value=date.today(),
+                min_value=LAB_DATE_MIN,
+                max_value=LAB_DATE_MAX,
                 format="DD/MM/YYYY",
-                key="cd19_test_date_widget_v2",
+                key="cd19_test_date_widget_v3",
             )
             st.session_state["cd19_test_date"] = cd19_date_input
 
