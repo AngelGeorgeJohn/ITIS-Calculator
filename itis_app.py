@@ -216,6 +216,27 @@ def apply_absolute_lymphocyte_adjustment(dose, lymph_value):
         return float(dose)
 
 # ============================================================
+# Cyclophosphamide IV lymphocyte adjustment window helper
+# ============================================================
+def calculate_cyc_iv_vanish_day(dose):
+    """
+    Dose-specific IV cyclophosphamide lymphocyte-adjustment window.
+    Interpolates vanish day from:
+    - 150 mg  -> 60 days
+    - 8000 mg -> 110 days
+    """
+    dose_min = 150.0
+    dose_max = 8000.0
+    vanish_min = 60.0
+    vanish_max = 110.0
+
+    dose = clip_to_interval(dose, dose_min, dose_max)
+    m_vanish = (vanish_max - vanish_min) / (dose_max - dose_min)
+    b_vanish = vanish_min - m_vanish * dose_min
+    vanish_day = m_vanish * dose + b_vanish
+    return float(np.clip(vanish_day, vanish_min, vanish_max))
+
+# ============================================================
 # CD19 helper for Rituximab only
 # ============================================================
 def apply_cd19_adjustment_for_rituximab(days_since_iv, iv_date, cd19_value, cd19_test_date):
@@ -712,7 +733,16 @@ def calculate_all_results():
                 adjusted_dose = apply_absolute_age_adjustment(adjusted_dose, age_at_encounter)
 
             if apply_lymph:
-                if cfg.get("lymphocyte_adjustment_type") == "relative":
+                if med_name == "Cyclophosphamide (IV)":
+                    # For IV cyclophosphamide, apply lymphocyte adjustment only if the
+                    # encounter is within that dose's dose-specific vanish window.
+                    days_since_iv_for_lymph = (encounter_date - iv_date).days
+                    cyc_vanish_day = calculate_cyc_iv_vanish_day(adjusted_dose)
+
+                    if 0 <= days_since_iv_for_lymph <= cyc_vanish_day:
+                        adjusted_dose = apply_relative_lymphocyte_adjustment(adjusted_dose, lymphocyte_count)
+
+                elif cfg.get("lymphocyte_adjustment_type") == "relative":
                     adjusted_dose = apply_relative_lymphocyte_adjustment(adjusted_dose, lymphocyte_count)
                 elif cfg.get("lymphocyte_adjustment_type") == "absolute":
                     adjusted_dose = apply_absolute_lymphocyte_adjustment(adjusted_dose, lymphocyte_count)
