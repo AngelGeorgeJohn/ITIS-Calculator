@@ -1297,21 +1297,22 @@ else:
     if st.session_state["lymphocyte_tested"] == "Yes":
         c1, c2 = st.columns(2)
         with c1:
-            # Calendar date input with broad bounds.
-            # This allows dates before or after the encounter date.
+            # Free text date input is used here deliberately.
+            # This avoids Streamlit calendar limits and allows dates before or after encounter date.
             lymph_default_date = st.session_state.get("lymphocyte_test_date", encounter_date)
             if lymph_default_date is None:
                 lymph_default_date = encounter_date
 
-            lymph_date_input = st.date_input(
+            lymph_date_text = st.text_input(
                 "Date of lymphocyte test (DD/MM/YYYY)",
-                value=lymph_default_date,
-                min_value=LAB_DATE_MIN,
-                max_value=LAB_DATE_MAX,
-                format="DD/MM/YYYY",
-                key="lymphocyte_test_date_calendar",
+                value=date_display(lymph_default_date),
+                key="lymphocyte_test_date_text",
             )
+            lymph_date_input = parse_date_text(lymph_date_text)
             st.session_state["lymphocyte_test_date"] = lymph_date_input
+
+            if lymph_date_input is None:
+                st.error("Please enter the lymphocyte test date in DD/MM/YYYY format.")
 
         with c2:
             st.number_input(
@@ -1337,21 +1338,22 @@ else:
     if st.session_state["cd19_tested"] == "Yes":
         c1, c2 = st.columns(2)
         with c1:
-            # Calendar date input with broad bounds.
-            # This allows dates before or after the encounter date.
+            # Free text date input is used here deliberately.
+            # This avoids Streamlit calendar limits and allows dates before or after encounter date.
             cd19_default_date = st.session_state.get("cd19_test_date", encounter_date)
             if cd19_default_date is None:
                 cd19_default_date = encounter_date
 
-            cd19_date_input = st.date_input(
+            cd19_date_text = st.text_input(
                 "Date of CD19 test (DD/MM/YYYY)",
-                value=cd19_default_date,
-                min_value=LAB_DATE_MIN,
-                max_value=LAB_DATE_MAX,
-                format="DD/MM/YYYY",
-                key="cd19_test_date_calendar",
+                value=date_display(cd19_default_date),
+                key="cd19_test_date_text",
             )
+            cd19_date_input = parse_date_text(cd19_date_text)
             st.session_state["cd19_test_date"] = cd19_date_input
+
+            if cd19_date_input is None:
+                st.error("Please enter the CD19 test date in DD/MM/YYYY format.")
 
         with c2:
             st.number_input(
